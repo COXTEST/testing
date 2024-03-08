@@ -1,16 +1,22 @@
+# Provider configuration
 provider "aws" {
-  region = "your_aws_region"
+  region = "us-east-1" # Set your desired AWS region
 }
 
-resource "aws_ecs_task_definition" "nginx" {
-  family                   = "nginx"
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
+# ECS cluster
+resource "aws_ecs_cluster" "nginx_cluster" {
+  name = "nginx-cluster"
+}
 
-  container_definitions = jsonencode([
+# ECS task definition
+resource "aws_ecs_task_definition" "nginx_task" {
+  family                   = "nginx-task"
+  container_definitions    = jsonencode([
     {
-      name  = "nginx"
+      name  = "nginx-container"
       image = "nginx:latest"
+      cpu   = 256 # CPU units
+      memory = 512 # Memory in MiB
       portMappings = [
         {
           containerPort = 80
@@ -19,25 +25,41 @@ resource "aws_ecs_task_definition" "nginx" {
       ]
     }
   ])
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
 }
 
-resource "aws_ecs_service" "nginx" {
+# ECS service
+resource "aws_ecs_service" "nginx_service" {
   name            = "nginx-service"
-  cluster         = "your_ecs_cluster"
-  task_definition = aws_ecs_task_definition.nginx.arn
-  launch_type     = "FARGATE"
+  cluster         = aws_ecs_cluster.nginx_cluster.id
+  task_definition = aws_ecs_task_definition.nginx_task.arn
   desired_count   = 1
+  launch_type     = "FARGATE"
+
   network_configuration {
-    subnets = ["your_subnet_ids"]
-    security_groups = ["your_security_group_id"]
+    subnets         = var.subnet_ids
+    assign_public_ip = true
+    security_groups = [aws_security_group.nginx_sg.id]
+  }
+
+  depends_on = [aws_ecs_task_definition.nginx_task]
+}
+
+# Security group
+resource "aws_security_group" "nginx_sg" {
+  name        = "nginx-sg"
+  description = "Security group for nginx"
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-data "aws_lb" "nginx_lb" {
-  for_each = aws_ecs_service.nginx
-  name    = each.value.load_balancer.first_name
-}
-
+# Output the public-facing URL
 output "nginx_url" {
-  value = "http://${data.aws_lb.nginx_lb[0].dns_name}"
+  value = "${aws_ecs_service.nginx_service.name}.${aws_ecs_cluster.nginx_cluster.id}.${var.vpc_id}.${data.aws_region.current.name}.elb.amazonaws.com"
 }
